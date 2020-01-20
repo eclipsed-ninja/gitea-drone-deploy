@@ -1,0 +1,101 @@
+version: "2"
+
+services:
+  gitea-app:
+    image: gitea/gitea:latest
+    container_name: gitea-app
+    environment:
+      - APP_NAME="REAK Git Server"
+      - RUN_MODE="prod"
+      - DISABLE_REGISTRATION=true
+      - REQUIRE_SIGNIN_VIEW=true
+      - USER_UID=1000
+      - USER_GID=1000
+      - ROOT_URL="https://git.example.com"
+      - SSH_DOMAIN="git.example.com"
+      - DEFAULT_THEME="arc-green"
+    restart: always
+    volumes:
+      - ./volumes/gitea_app:/data
+    ports:
+      - "22:22"
+    networks:
+      - appnet
+
+  gitea-db:
+    image: postgres:alpine
+    container_name: gitea-db
+    restart: always
+    volumes:
+      - ./volumes/gitea_db:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=<SECRET>
+      - POSTGRES_PASSWORD=<SECRET>
+      - POSTGRES_DB=gitea
+    networks:
+      - appnet
+
+  drone-server:
+    image: drone/drone:latest
+    container_name: drone-server
+    volumes:
+      - ./volumes/drone:/var/lib/drone/
+    restart: always
+    depends_on:
+      - gitea-app
+    environment:
+      - DRONE_GITEA_CLIENT_ID=<SECRET>
+      - DRONE_GITEA_CLIENT_SECRET=<SECRET>
+      - DRONE_GITEA_SERVER=https://git.example.com
+      - DRONE_GIT_ALWAYS_AUTH=true
+      - DRONE_RPC_SECRET=<SECRET>
+      - DRONE_SERVER_HOST=drone.example.com
+      - DRONE_SERVER_PROTO=https
+    networks:
+      - appnet
+
+  drone-runner-docker:
+    image: drone/drone-runner-docker:latest
+    container_name: drone-runner
+    restart: always
+    depends_on:
+      - drone-server
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DRONE_RPC_HOST=drone-server
+      - DRONE_RPC_PROTO=http
+      - DRONE_RPC_SECRET=<SECRET>
+    networks:
+      - appnet
+
+  nginx:
+    image: nginx:1.15-alpine
+    container_name: nginx-server
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./volumes/nginx:/etc/nginx/conf.d
+      - ./volumes/certbot/conf:/etc/letsencrypt
+      - ./volumes/certbot/www:/var/www/certbot
+    command: "/bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g \"daemon off;\"'"
+    networks:
+      - appnet
+  certbot:
+    image: certbot/certbot
+    container_name: certbot-server
+    volumes:
+      - ./volumes/certbot/conf:/etc/letsencrypt
+      - ./volumes/certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - appnet
+
+volumes:
+  gitea-app:
+  gitea-db:
+
+networks:
+  appnet:
+    external: true
